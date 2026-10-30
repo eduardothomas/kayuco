@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+  push:
+    branches: [main]
+
+jobs:
+  # Regla 25: un PR que cambia código debe actualizar estado-del-proyecto.md ("sin-estado" lo omite).
+  estado-del-proyecto:
+    if: github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'sin-estado')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - run: bash scripts/verificar-estado.sh "origin/${{ github.base_ref }}"
+
+  # Regla 26: el mismo comando que el candado. Linux basta para KayucoCore (Swift Package);
+  # lo que requiera macOS (host, menu bar) se compila en Xcode Cloud, no aquí (regla 23).
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: swift-actions/setup-swift@v2
+        if: hashFiles('Package.swift') != ''
+        with:
+          swift-version: "6.1"
+      - run: bash scripts/check.sh
