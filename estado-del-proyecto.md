@@ -14,7 +14,7 @@ Cabina nativa Apple sobre agentes de código (ACP). Arranque: visión, ADRs y ba
 ## Trabajo en curso
 | Rama | PR | Quién | Estado | Siguiente paso |
 |---|---|---|---|---|
-| docs/vision-y-arranque | (ver PR) | Claude | en revisión | Eduardo revisa y fusiona (squash) |
+| feature/kayuco-core | (ver PR) | Claude | en curso | Modelos del protocolo y de la política de ruteo con pruebas |
 
 ## Última sesión
 - **Fecha y actor:** 2026-10-30 · Claude (Fable, high), sesión en claude.ai
