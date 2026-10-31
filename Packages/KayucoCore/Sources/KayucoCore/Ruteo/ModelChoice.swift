@@ -10,17 +10,19 @@ public struct ModelChoice: Codable, Sendable, Hashable, CustomStringConvertible 
         self.effort = effort
     }
 
-    /// Interpreta «Modelo · esfuerzo» (punto medio U+00B7). Nil si falta alguna parte o el esfuerzo no existe.
+    /// Interpreta «Modelo · esfuerzo» (punto medio U+00B7). Nil si falta alguna parte; un esfuerzo nuevo se conserva como `.unknown`.
     public init?(parsing text: String) {
         let parts = text.split(separator: "\u{00B7}", omittingEmptySubsequences: false)
         guard parts.count == 2 else { return nil }
         let model = parts[0].trimmingCharacters(in: .whitespacesAndNewlines)
-        let effortText = parts[1].trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !model.isEmpty, let effort = Effort(rawValue: effortText) else { return nil }
+        guard !model.isEmpty, let effort = Effort(parsing: String(parts[1])) else { return nil }
         self.init(model: model, effort: effort)
     }
 
     public var description: String { "\(model) · \(effort.rawValue)" }
+
+    /// Falso si el esfuerzo es desconocido para este cliente.
+    public var isKnown: Bool { effort.isKnown }
 }
 
 /// Fila de la tabla de roles.

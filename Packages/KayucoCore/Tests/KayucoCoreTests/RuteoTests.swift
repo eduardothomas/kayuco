@@ -28,14 +28,15 @@ struct RuteoModelosTests {
         #expect(ModelChoice(parsing: text) == ModelChoice(model: model, effort: effort))
     }
 
-    @Test(arguments: ["Opus", "Opus · turbo", " · low", "", "A · low · high"])
+    @Test(arguments: ["Opus", "Opus · ", " · low", "", "A · low · high"])
     func modelChoiceInvalid(text: String) {
         #expect(ModelChoice(parsing: text) == nil)
     }
 
     @Test func modelChoiceDescriptionAndEffortOrder() {
         #expect(ModelChoice(model: "Haiku", effort: .low).description == "Haiku · low")
-        #expect(Effort.low < .medium && Effort.high < .xhigh && Effort.xhigh < .max)
+        #expect(Effort.low.rank! < Effort.medium.rank! && Effort.xhigh.rank! < Effort.max.rank!)
+        #expect(Effort.unknown("turbo").rank == nil && !Effort.unknown("turbo").isKnown)
     }
 
     @Test(arguments: [
@@ -56,9 +57,52 @@ struct RuteoModelosTests {
         #expect(Orchestrator(parsing: text) == expected)
     }
 
-    @Test(arguments: ["", "GPT", "gpt ", "Claude Haiku", "Claude ", "magia", "local", "gpt-", "Gemini-"])
-    func orchestratorInvalid(text: String) {
+    @Test(arguments: ["", "   "])
+    func orchestratorEmpty(text: String) {
         #expect(Orchestrator(parsing: text) == nil)
+    }
+
+    @Test(arguments: ["GPT", "Claude Haiku", "Claude", "magia", "local", "gpt-", "Mistral Large"])
+    func orchestratorUnknown(text: String) {
+        #expect(Orchestrator(parsing: text) == .unknown(text))
+        #expect(Orchestrator(parsing: text)?.isKnown == false)
+    }
+
+    @Test func orchestratorUnknownEffort() {
+        let parsed = Orchestrator(parsing: "Claude Opus · ultra")
+        #expect(parsed == .claude(ModelChoice(model: "Opus", effort: .unknown("ultra"))))
+        #expect(parsed?.isKnown == false)
+    }
+
+    @Test(arguments: [
+        Orchestrator.onDevice, .privateCloudCompute, .host,
+        .claude(ModelChoice(model: "Opus", effort: .high)),
+        .claude(ModelChoice(model: "Opus", effort: .unknown("ultra"))),
+        .gpt("GPT-5 mini"), .gpt("5 mini"), .gemini("Gemini-2.5-flash"), .gemini("Flash"),
+        .local("llama3"), .unknown("Mistral Large"),
+    ])
+    func orchestratorDescriptionRoundTrip(value: Orchestrator) {
+        #expect(Orchestrator(parsing: value.description) == value)
+    }
+
+    @Test func modelChoiceUnknownEffort() {
+        let choice = ModelChoice(parsing: "Opus · turbo")
+        #expect(choice == ModelChoice(model: "Opus", effort: .unknown("turbo")))
+        #expect(choice?.isKnown == false)
+    }
+
+    @Test(arguments: [("Effort", " HIGH "), ("Effort", "turbo")])
+    func effortParsing(_: String, text: String) {
+        let effort = Effort(parsing: text)
+        #expect(effort == (text.contains("HIGH") ? .high : .unknown("turbo")))
+        #expect(Effort(parsing: "  ") == nil)
+    }
+
+    @Test func roleNameUnknownAndEmpty() {
+        #expect(Role(name: " **Diseñador** ") == .unknown("Diseñador"))
+        #expect(Role(name: "  ") == nil)
+        #expect(Role(rawValue: "explore") == .unknown("explore"))
+        #expect(Role.unknown("x").isKnown == false && Role.revisor.isKnown)
     }
 
     @Test(arguments: [
@@ -69,7 +113,7 @@ struct RuteoModelosTests {
         #expect(Role(name: text) == expected)
     }
 
-    @Test(arguments: ["", "planner", "implementador critico"])
+    @Test(arguments: ["", "  ", "****"])
     func roleInvalid(text: String) {
         #expect(Role(name: text) == nil)
     }
@@ -146,11 +190,16 @@ struct RuteoErroresTests {
     @Test func unknownRole() {
         let md = rolesTable.replacingOccurrences(of: "**revisor**", with: "**planner**")
         #expect(throws: RoutingPolicyError.unknownRole("**planner**", line: 6)) { try parse(md) }
+        let policy = try? RoutingPolicyParser.parse(md.replacingOccurrences(of: "**planner**", with: "**revisor**"))
+        #expect(policy != nil)
     }
 
     @Test func invalidModelChoice() {
         let md = rolesTable.replacingOccurrences(of: "Sonnet · medium", with: "Sonnet")
         #expect(throws: RoutingPolicyError.invalidModelChoice("Sonnet", line: 4)) { try parse(md) }
+        #expect(throws: RoutingPolicyError.invalidModelChoice("Sonnet", line: 4)) {
+            try RoutingPolicyParser.parse(md, mode: .tolerant)
+        }
     }
 
     @Test func duplicateRole() {
@@ -245,5 +294,141 @@ struct RuteoErroresTests {
         let md = rolesTable + overridesHead
             + "| Dispositivo | Rol | Valor |\n|---|---|---|\n|  | Explore | Sonnet · low |"
         #expect(throws: RoutingPolicyError.emptyDevice(line: 12)) { try parse(md) }
+    }
+}
+
+
+@Suite("Ruteo abiertos")
+struct RuteoAbiertosTests {
+    @Test func strictAndTolerantAgreeOnRealFile() throws {
+        let md = try fixture("routing")
+        #expect(try RoutingPolicyParser.parse(md, mode: .strict) == RoutingPolicyParser.parse(md, mode: .tolerant))
+    }
+
+    private func table(explore: String = "Haiku · low", extraRow: String = "") -> String {
+        """
+        | Rol | Cuándo | Claude | Equivalente |
+        |---|---|---|---|
+        | Explore | a | \(explore) | x |
+        | implementador | b | Sonnet · medium | y |
+        | implementador-critico | c | Opus · high | z |
+        | revisor | d | Opus · high | w |
+        \(extraRow)
+        """
+    }
+
+    @Test func unknownEffortInRolesTable() throws {
+        let md = table(explore: "Sonnet · ultra")
+        #expect(throws: RoutingPolicyError.invalidModelChoice("Sonnet · ultra", line: 3)) { try RoutingPolicyParser.parse(md) }
+        let policy = try RoutingPolicyParser.parse(md, mode: .tolerant)
+        #expect(policy.modelChoice(for: .explore) == ModelChoice(model: "Sonnet", effort: .unknown("ultra")))
+    }
+
+    @Test func unknownRoleInRolesTable() throws {
+        let md = table(extraRow: "| diseñador | e | Sonnet · low | v |")
+        #expect(throws: RoutingPolicyError.unknownRole("diseñador", line: 7)) { try RoutingPolicyParser.parse(md) }
+        let policy = try RoutingPolicyParser.parse(md, mode: .tolerant)
+        #expect(policy.modelChoice(for: .unknown("diseñador")) == ModelChoice(model: "Sonnet", effort: .low))
+        #expect(policy.modelChoice(for: .unknown("otro")) == nil)
+    }
+
+    @Test func unknownOrchestrator() throws {
+        let md = table() + "\n\n## Orquestador\n\n- barato: Mistral Large\n- fuerte: Claude Opus · high"
+        #expect(throws: RoutingPolicyError.invalidOrchestrator("Mistral Large", line: 11)) { try RoutingPolicyParser.parse(md) }
+        let policy = try RoutingPolicyParser.parse(md, mode: .tolerant)
+        #expect(policy.orchestrator?.cheap == .unknown("Mistral Large"))
+        #expect(policy.orchestrator(for: nil)?.cheap == nil)
+        #expect(policy.orchestrator(for: nil)?.strong == .claude(ModelChoice(model: "Opus", effort: .high)))
+    }
+
+    @Test func structuralErrorsApplyInTolerantMode() {
+        #expect(throws: RoutingPolicyError.invalidModelChoice("Sonnet", line: 3)) {
+            try RoutingPolicyParser.parse(table(explore: "Sonnet"), mode: .tolerant)
+        }
+        let md = table() + "\n\n## Orquestador\n\n- fuerte:"
+        #expect(throws: RoutingPolicyError.invalidOrchestrator("", line: 11)) {
+            try RoutingPolicyParser.parse(md, mode: .tolerant)
+        }
+        let missing = table().split(separator: "\n").dropLast().joined(separator: "\n")
+        #expect(throws: RoutingPolicyError.missingRole(.revisor)) {
+            try RoutingPolicyParser.parse(missing, mode: .tolerant)
+        }
+    }
+
+    @Test func unknownInOverridesStrictAndTolerant() throws {
+        let head = table() + "\n\n## Orquestador\n- fuerte: host\n- barato: on-device\n\n## Overrides por dispositivo\n\n| Dispositivo | Rol | Valor |\n|---|---|---|\n"
+        let badRole = head + "| iphone | diseñador | Sonnet · low |"
+        #expect(throws: RoutingPolicyError.unknownRole("diseñador", line: 17)) { try RoutingPolicyParser.parse(badRole) }
+        _ = try RoutingPolicyParser.parse(badRole, mode: .tolerant)
+        let badEffort = head + "| iphone | Explore | Sonnet · ultra |"
+        #expect(throws: RoutingPolicyError.invalidModelChoice("Sonnet · ultra", line: 17)) { try RoutingPolicyParser.parse(badEffort) }
+        let badOrch = head + "| iphone | orquestador | Mistral Large |"
+        #expect(throws: RoutingPolicyError.invalidOrchestrator("Mistral Large", line: 17)) { try RoutingPolicyParser.parse(badOrch) }
+    }
+
+    @Test func resolutionFallbacks() throws {
+        let rules = Dictionary(uniqueKeysWithValues: Role.required.map {
+            ($0, RoleRule(role: $0, when: "w", claude: ModelChoice(model: "M", effort: .low), otherAgents: "o"))
+        })
+        let ultra = ModelChoice(model: "S", effort: .unknown("ultra"))
+        let unknownOrch = Orchestrator.unknown("Mistral Large")
+        let overrides = [DeviceOverride(device: "iphone", roles: [.explore: ultra], cheapOrchestrator: unknownOrch)]
+
+        let p1 = try RoutingPolicy(roles: rules,
+            orchestrator: OrchestratorPolicy(cheap: .onDevice, strong: .host), overrides: overrides)
+        #expect(p1.modelChoice(for: .explore, device: "iphone") == ModelChoice(model: "M", effort: .low))
+        #expect(p1.orchestrator(for: "iphone")?.cheap == .onDevice)
+
+        let p2 = try RoutingPolicy(roles: rules,
+            orchestrator: OrchestratorPolicy(cheap: unknownOrch, strong: .host))
+        #expect(p2.orchestrator(for: nil)?.cheap == nil)
+
+        let p3 = try RoutingPolicy(roles: rules,
+            orchestrator: OrchestratorPolicy(cheap: .onDevice, strong: unknownOrch))
+        #expect(p3.orchestrator(for: nil) == nil)
+    }
+
+    @Test func goldenJSON() throws {
+        func rule(_ r: Role) -> RoleRule {
+            RoleRule(role: r, when: "w", claude: ModelChoice(model: "Sonnet", effort: .low), otherAgents: "o")
+        }
+        let policy = try RoutingPolicy(
+            roles: Dictionary(uniqueKeysWithValues: Role.required.map { ($0, rule($0)) }),
+            orchestrator: OrchestratorPolicy(
+                cheap: .onDevice, strong: .claude(ModelChoice(model: "Opus", effort: .high)), minAccuracy: 0.9),
+            overrides: [DeviceOverride(
+                device: "iphone", roles: [.explore: ModelChoice(model: "Sonnet", effort: .low)],
+                cheapOrchestrator: .host)])
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let json = try #require(String(data: encoder.encode(policy), encoding: .utf8))
+        #expect(json.contains(#""orchestrator":{"cheap":"on-device","minAccuracy":0.9,"strong":"Claude Opus · high"}"#))
+        #expect(json.contains(#""overrides":[{"cheapOrchestrator":"host","device":"iphone","roles":{"Explore":{"effort":"low","model":"Sonnet"}}}]"#))
+        #expect(json.contains(#""roles":{"Explore":{"claude":{"effort":"low","model":"Sonnet"},"#))
+        #expect(try JSONDecoder().decode(RoutingPolicy.self, from: Data(json.utf8)) == policy)
+    }
+
+    @Test func unknownValuesSurviveJSON() throws {
+        let json = """
+        {"roles":{"Explore":R,"implementador":R,"implementador-critico":R,"revisor":R,"diseñador":R},
+         "orchestrator":{"cheap":"Mistral Large","strong":"Claude Opus · ultra"},
+         "overrides":[]}
+        """.replacingOccurrences(of: "R", with: #"{"claude":{"effort":"ultra","model":"X"},"otherAgents":"","role":"Explore","when":""}"#)
+        let policy = try JSONDecoder().decode(RoutingPolicy.self, from: Data(json.utf8))
+        #expect(policy.roles[.unknown("diseñador")] != nil)
+        #expect(policy.orchestrator?.cheap == .unknown("Mistral Large"))
+        let again = try JSONDecoder().decode(RoutingPolicy.self, from: JSONEncoder().encode(policy))
+        #expect(again == policy)
+        let text = try #require(String(data: JSONEncoder().encode(policy), encoding: .utf8))
+        #expect(text.contains("Mistral Large") && text.contains("ultra") && text.contains("diseñador"))
+    }
+
+    @Test func missingRequiredRoleInJSONFails() {
+        let json = #"{"roles":{"Explore":{"claude":{"effort":"low","model":"X"},"otherAgents":"","role":"Explore","when":""}},"overrides":[]}"#
+        #expect(throws: DecodingError.self) { try JSONDecoder().decode(RoutingPolicy.self, from: Data(json.utf8)) }
+    }
+
+    @Test func emptyOrchestratorStringFailsToDecode() {
+        #expect(throws: DecodingError.self) { try JSONDecoder().decode(Orchestrator.self, from: Data(#""""#.utf8)) }
     }
 }

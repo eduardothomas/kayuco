@@ -14,6 +14,12 @@ import Foundation
 ///   a otra tabla con encabezado y fila separadora es `strayTableRow`; también lo es otra tabla
 ///   con columna «Dispositivo». Un encabezado `#` da por terminada la revisión.
 public enum RoutingPolicyParser {
+    /// `.strict` en el host al cargar o editar el archivo del usuario (detecta errores de dedo);
+    /// `.tolerant` en los clientes al leer la copia sincronizada (un valor nuevo no tumba la política).
+    /// Siempre se parsea de forma tolerante; `.strict` añade rechazar roles, esfuerzos y
+    /// orquestadores desconocidos. Los errores estructurales aplican en ambos modos.
+    public enum ParseMode: Sendable { case strict, tolerant }
+
     private struct Line {
         let number: Int   // base 1, del archivo completo
         let text: String  // recortado
@@ -25,7 +31,7 @@ public enum RoutingPolicyParser {
         let lastLine: Int
     }
 
-    public static func parse(_ markdown: String) throws(RoutingPolicyError) -> RoutingPolicy {
+    public static func parse(_ markdown: String, mode: ParseMode = .strict) throws(RoutingPolicyError) -> RoutingPolicy {
         let normalized = markdown
             .replacingOccurrences(of: "\r\n", with: "\n")
             .replacingOccurrences(of: "\r", with: "\n")
@@ -54,11 +60,11 @@ public enum RoutingPolicyParser {
         if let overridesSection {
             roleLines = lines.filter { !overridesSection.contains($0.number) }
         }
-        let roles = try parseRoles(tables(in: roleLines))
+        let roles = try parseRoles(tables(in: roleLines), mode)
 
         var orchestrator: OrchestratorPolicy?
         if let orchestratorSection {
-            orchestrator = try parseOrchestrator(lines.filter { orchestratorSection.contains($0.number) })
+            orchestrator = try parseOrchestrator(lines.filter { orchestratorSection.contains($0.number) }, mode)
         }
 
         var overrides: [DeviceOverride] = []
@@ -67,7 +73,7 @@ public enum RoutingPolicyParser {
             let found = tables(in: sectionLines)
             if let table = found.first(where: { column("dispositivo", in: $0.header) != nil }) {
                 try checkStrayRows(after: table, in: sectionLines)
-                overrides = try parseOverrides(table, hasOrchestrator: orchestrator != nil)
+                overrides = try parseOverrides(table, hasOrchestrator: orchestrator != nil, mode)
             } else if sectionLines.contains(where: { $0.text.hasPrefix("|") }) {
                 throw .missingColumn("Dispositivo")
             }
@@ -165,7 +171,7 @@ public enum RoutingPolicyParser {
 
     // MARK: - Roles
 
-    private static func parseRoles(_ tables: [Table]) throws(RoutingPolicyError) -> [Role: RoleRule] {
+    private static func parseRoles(_ tables: [Table], _ mode: ParseMode) throws(RoutingPolicyError) -> [Role: RoleRule] {
         let table: Table
         let roleColumn: Int
         let claudeColumn: Int
@@ -185,9 +191,11 @@ public enum RoutingPolicyParser {
         var roles: [Role: RoleRule] = [:]
         for row in table.rows {
             let roleText = cell(row.cells, roleColumn)
-            guard let role = Role(name: roleText) else { throw .unknownRole(roleText, line: row.line) }
+            guard let role = Role(name: roleText), role.isKnown || mode == .tolerant else {
+                throw .unknownRole(roleText, line: row.line)
+            }
             let claudeText = cell(row.cells, claudeColumn)
-            guard let choice = ModelChoice(parsing: claudeText) else {
+            guard let choice = ModelChoice(parsing: claudeText), choice.isKnown || mode == .tolerant else {
                 throw .invalidModelChoice(claudeText, line: row.line)
             }
             if roles[role] != nil { throw .duplicateRole(role, line: row.line) }
@@ -195,13 +203,13 @@ public enum RoutingPolicyParser {
                 role: role, when: cell(row.cells, whenColumn), claude: choice,
                 otherAgents: cell(row.cells, otherColumn))
         }
-        for role in Role.allCases where roles[role] == nil { throw .missingRole(role) }
+        for role in Role.required where roles[role] == nil { throw .missingRole(role) }
         return roles
     }
 
     // MARK: - Orquestador
 
-    private static func parseOrchestrator(_ lines: [Line]) throws(RoutingPolicyError) -> OrchestratorPolicy {
+    private static func parseOrchestrator(_ lines: [Line], _ mode: ParseMode) throws(RoutingPolicyError) -> OrchestratorPolicy {
         var cheap: Orchestrator?
         var strong: Orchestrator?
         var threshold: Double?
@@ -215,12 +223,12 @@ public enum RoutingPolicyParser {
                 .trimmingCharacters(in: .whitespaces)
             switch key {
             case "barato":
-                guard let parsed = Orchestrator(parsing: value) else {
+                guard let parsed = Orchestrator(parsing: value), parsed.isKnown || mode == .tolerant else {
                     throw .invalidOrchestrator(value, line: line.number)
                 }
                 cheap = parsed
             case "fuerte":
-                guard let parsed = Orchestrator(parsing: value) else {
+                guard let parsed = Orchestrator(parsing: value), parsed.isKnown || mode == .tolerant else {
                     throw .invalidOrchestrator(value, line: line.number)
                 }
                 strong = parsed
@@ -240,7 +248,7 @@ public enum RoutingPolicyParser {
     // MARK: - Overrides
 
     private static func parseOverrides(
-        _ table: Table, hasOrchestrator: Bool
+        _ table: Table, hasOrchestrator: Bool, _ mode: ParseMode
     ) throws(RoutingPolicyError) -> [DeviceOverride] {
         guard let deviceColumn = column("dispositivo", in: table.header) else { throw .missingColumn("Dispositivo") }
         guard let roleColumn = column("rol", in: table.header) else { throw .missingColumn("Rol") }
@@ -260,7 +268,7 @@ public enum RoutingPolicyParser {
                 .trimmingCharacters(in: .whitespaces).lowercased() == "orquestador"
             if isOrchestrator {
                 guard hasOrchestrator else { throw .overrideWithoutOrchestrator(line: row.line) }
-                guard let parsed = Orchestrator(parsing: value) else {
+                guard let parsed = Orchestrator(parsing: value), parsed.isKnown || mode == .tolerant else {
                     throw .invalidOrchestrator(value, line: row.line)
                 }
                 if entry.cheapOrchestrator != nil {
@@ -268,8 +276,10 @@ public enum RoutingPolicyParser {
                 }
                 entry.cheapOrchestrator = parsed
             } else {
-                guard let role = Role(name: roleText) else { throw .unknownRole(roleText, line: row.line) }
-                guard let choice = ModelChoice(parsing: value) else {
+                guard let role = Role(name: roleText), role.isKnown || mode == .tolerant else {
+                throw .unknownRole(roleText, line: row.line)
+            }
+                guard let choice = ModelChoice(parsing: value), choice.isKnown || mode == .tolerant else {
                     throw .invalidModelChoice(value, line: row.line)
                 }
                 if entry.roles[role] != nil {
