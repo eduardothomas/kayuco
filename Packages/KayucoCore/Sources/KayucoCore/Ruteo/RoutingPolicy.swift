@@ -11,6 +11,8 @@ public enum RoutingPolicyError: Error, Equatable, Sendable {
     case invalidThreshold(String, line: Int)
     case overrideWithoutOrchestrator(line: Int)
     case duplicateOverride(device: String, role: String, line: Int)
+    case strayTableRow(line: Int)
+    case emptyDevice(line: Int)
 }
 
 /// Política de ruteo: reglas por rol, orquestador opcional y overrides por dispositivo.

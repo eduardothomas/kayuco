@@ -47,6 +47,8 @@ struct RuteoModelosTests {
         ("HOST", .host),
         ("Claude Haiku · low", .claude(ModelChoice(model: "Haiku", effort: .low))),
         ("GPT 5 mini", .gpt("5 mini")),
+        ("GPT-5 mini", .gpt("GPT-5 mini")),
+        ("Gemini-2.5-flash", .gemini("Gemini-2.5-flash")),
         ("Gemini Flash", .gemini("Flash")),
         ("local llama3", .local("llama3")),
     ])
@@ -54,7 +56,7 @@ struct RuteoModelosTests {
         #expect(Orchestrator(parsing: text) == expected)
     }
 
-    @Test(arguments: ["", "GPT", "gpt ", "Claude Haiku", "Claude ", "magia", "local"])
+    @Test(arguments: ["", "GPT", "gpt ", "Claude Haiku", "Claude ", "magia", "local", "gpt-", "Gemini-"])
     func orchestratorInvalid(text: String) {
         #expect(Orchestrator(parsing: text) == nil)
     }
@@ -195,5 +197,53 @@ struct RuteoErroresTests {
         #expect(policy.roles[.explore]?.when == "")
         #expect(policy.roles[.explore]?.otherAgents == "")
         #expect(policy.orchestrator == OrchestratorPolicy(cheap: nil, strong: .privateCloudCompute))
+    }
+
+    @Test func crlfMatchesLf() throws {
+        let lf = try fixture("routing")
+        let crlf = lf.replacingOccurrences(of: "\n", with: "\r\n")
+        #expect(try RoutingPolicyParser.parse(crlf) == RoutingPolicyParser.parse(lf))
+        let kayuco = try fixture("routing-kayuco")
+        let cr = kayuco.replacingOccurrences(of: "\n", with: "\r")
+        #expect(try RoutingPolicyParser.parse(cr) == RoutingPolicyParser.parse(kayuco))
+    }
+
+    @Test func codeFenceIsIgnored() throws {
+        let md = rolesTable + "\n\n## Orquestador\n\n- fuerte: host\n```\n# ejemplo\n| a | b |\n```\n- **umbral:** 0.9\n~~~\n## Overrides por dispositivo\n~~~"
+        let policy = try parse(md)
+        #expect(policy.orchestrator?.minAccuracy == 0.9)
+        #expect(policy.overrides.isEmpty)
+    }
+
+    private let overridesHead = "\n\n## Overrides por dispositivo\n\n"
+
+    @Test func notesTableBeforeOverridesIsIgnored() throws {
+        let md = rolesTable + "\n\n## Orquestador\n- fuerte: host" + overridesHead
+            + "| Nota | Texto |\n|---|---|\n| a | b |\n\n| Dispositivo | Rol | Valor |\n|---|---|---|\n| iphone | Explore | Sonnet · low |"
+        let policy = try parse(md)
+        #expect(policy.overrides.map(\.device) == ["iphone"])
+    }
+
+    @Test func overridesWithoutDeviceColumn() {
+        let md = rolesTable + overridesHead + "| Nota | Texto |\n|---|---|\n| a | b |"
+        #expect(throws: RoutingPolicyError.missingColumn("Dispositivo")) { try parse(md) }
+    }
+
+    @Test func strayRowAfterBlankLine() {
+        let md = rolesTable + overridesHead
+            + "| Dispositivo | Rol | Valor |\n|---|---|---|\n| iphone | Explore | Sonnet · low |\n\n| watch | revisor | Sonnet · medium |"
+        #expect(throws: RoutingPolicyError.strayTableRow(line: 14)) { try parse(md) }
+    }
+
+    @Test func strayDeviceTable() {
+        let md = rolesTable + overridesHead
+            + "| Dispositivo | Rol | Valor |\n|---|---|---|\n| iphone | Explore | Sonnet · low |\n\n| Dispositivo | Rol | Valor |\n|---|---|---|\n| watch | revisor | Sonnet · medium |"
+        #expect(throws: RoutingPolicyError.strayTableRow(line: 14)) { try parse(md) }
+    }
+
+    @Test func emptyDevice() {
+        let md = rolesTable + overridesHead
+            + "| Dispositivo | Rol | Valor |\n|---|---|---|\n|  | Explore | Sonnet · low |"
+        #expect(throws: RoutingPolicyError.emptyDevice(line: 12)) { try parse(md) }
     }
 }

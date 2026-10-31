@@ -3,6 +3,16 @@ import Foundation
 /// Lee una política de ruteo desde Markdown con la forma de `agents/routing.md`.
 ///
 /// Limitación: no se soportan `\|` escapados dentro de las celdas de las tablas.
+///
+/// Reglas:
+/// - Se normalizan `\r\n` y `\r` a `\n` antes de leer.
+/// - Las líneas dentro de bloques de código (``` o ~~~) se ignoran por completo: no cuentan
+///   como encabezados, tablas ni viñetas (los números de línea se conservan).
+/// - En `## Overrides por dispositivo` se usa la primera tabla con columna «Dispositivo». Si la
+///   sección tiene líneas `|` pero ninguna tabla así, `missingColumn("Dispositivo")`.
+/// - Cualquier línea `|` posterior a esa tabla (p. ej. tras una línea en blanco) que no pertenezca
+///   a otra tabla con encabezado y fila separadora es `strayTableRow`; también lo es otra tabla
+///   con columna «Dispositivo». Un encabezado `#` da por terminada la revisión.
 public enum RoutingPolicyParser {
     private struct Line {
         let number: Int   // base 1, del archivo completo
@@ -12,12 +22,29 @@ public enum RoutingPolicyParser {
     private struct Table {
         let header: [String]
         let rows: [(line: Int, cells: [String])]
+        let lastLine: Int
     }
 
     public static func parse(_ markdown: String) throws(RoutingPolicyError) -> RoutingPolicy {
-        let lines = markdown.split(separator: "\n", omittingEmptySubsequences: false)
+        let normalized = markdown
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+        var fence: String?
+        let lines: [Line] = normalized.split(separator: "\n", omittingEmptySubsequences: false)
             .enumerated()
-            .map { Line(number: $0.offset + 1, text: $0.element.trimmingCharacters(in: .whitespacesAndNewlines)) }
+            .map { offset, raw in
+                let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+                let marker = text.hasPrefix("```") ? "```" : (text.hasPrefix("~~~") ? "~~~" : nil)
+                if let open = fence {
+                    if marker == open { fence = nil }
+                    return Line(number: offset + 1, text: "")
+                }
+                if let marker {
+                    fence = marker
+                    return Line(number: offset + 1, text: "")
+                }
+                return Line(number: offset + 1, text: text)
+            }
 
         let orchestratorSection = section(titled: "orquestador", in: lines)
         let overridesSection = section(titled: "overrides por dispositivo", in: lines)
@@ -37,8 +64,12 @@ public enum RoutingPolicyParser {
         var overrides: [DeviceOverride] = []
         if let overridesSection {
             let sectionLines = lines.filter { overridesSection.contains($0.number) }
-            if let table = tables(in: sectionLines).first {
+            let found = tables(in: sectionLines)
+            if let table = found.first(where: { column("dispositivo", in: $0.header) != nil }) {
+                try checkStrayRows(after: table, in: sectionLines)
                 overrides = try parseOverrides(table, hasOrchestrator: orchestrator != nil)
+            } else if sectionLines.contains(where: { $0.text.hasPrefix("|") }) {
+                throw .missingColumn("Dispositivo")
             }
         }
         return try RoutingPolicy(roles: roles, orchestrator: orchestrator, overrides: overrides)
@@ -90,7 +121,7 @@ public enum RoutingPolicyParser {
                 let rows = block.dropFirst()
                     .map { (line: $0.number, cells: cells(of: $0.text)) }
                     .filter { !isSeparator($0.cells) }
-                result.append(Table(header: cells(of: first.text), rows: rows))
+                result.append(Table(header: cells(of: first.text), rows: rows, lastLine: block.last!.number))
             }
             block = []
         }
@@ -99,6 +130,28 @@ public enum RoutingPolicyParser {
         }
         flush()
         return result
+    }
+
+    /// Lanza `strayTableRow` si tras `table` hay líneas `|` que no forman otra tabla válida.
+    private static func checkStrayRows(after table: Table, in lines: [Line]) throws(RoutingPolicyError) {
+        let rest = lines.filter { $0.number > table.lastLine }
+        var i = 0
+        while i < rest.count {
+            let line = rest[i]
+            if line.text.hasPrefix("#") { return }
+            if line.text.hasPrefix("|") {
+                var j = i
+                while j < rest.count, rest[j].text.hasPrefix("|") { j += 1 }
+                let block = rest[i..<j]
+                let hasSeparator = block.count >= 2 && isSeparator(cells(of: block[block.startIndex + 1].text))
+                if !hasSeparator || column("dispositivo", in: cells(of: line.text)) != nil {
+                    throw .strayTableRow(line: line.number)
+                }
+                i = j
+            } else {
+                i += 1
+            }
+        }
     }
 
     private static func column(_ name: String, in header: [String]) -> Int? {
@@ -199,6 +252,7 @@ public enum RoutingPolicyParser {
             let device = cell(row.cells, deviceColumn)
             let roleText = cell(row.cells, roleColumn)
             let value = cell(row.cells, valueColumn)
+            if device.isEmpty { throw .emptyDevice(line: row.line) }
             let key = device.lowercased()
             var entry = byDevice[key] ?? DeviceOverride(device: device)
 

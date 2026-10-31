@@ -31,8 +31,12 @@ public enum Orchestrator: Codable, Sendable, Hashable {
             self = .claude(choice)
         } else if let value = rest(after: "gpt ") {
             self = .gpt(value)
+        } else if rest(after: "gpt-") != nil {
+            self = .gpt(trimmed)
         } else if let value = rest(after: "gemini ") {
             self = .gemini(value)
+        } else if rest(after: "gemini-") != nil {
+            self = .gemini(trimmed)
         } else if let value = rest(after: "local ") {
             self = .local(value)
         } else {
