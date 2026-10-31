@@ -20,13 +20,12 @@ jobs:
 
   # Regla 26: el mismo comando que el candado. Linux basta para KayucoCore (Swift Package);
   # lo que requiera macOS (host, menu bar) se compila en Xcode Cloud, no aquí (regla 23).
+  # Imagen oficial de Swift en vez de setup-swift: no depende de la versión de Ubuntu del runner.
+  # 6.1 = la swift-tools-version mínima de los paquetes; si compila aquí, compila en Xcode.
   check:
     runs-on: ubuntu-latest
+    container: swift:6.1
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
-      - uses: swift-actions/setup-swift@v2
-        if: hashFiles('Package.swift', 'Packages/*/Package.swift') != ''
-        with:
-          swift-version: "6.1"
       - run: bash scripts/check.sh
