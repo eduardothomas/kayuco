@@ -28,7 +28,7 @@ public struct RoutingPolicy: Codable, Sendable, Hashable {
         orchestrator: OrchestratorPolicy? = nil,
         overrides: [DeviceOverride] = []
     ) throws(RoutingPolicyError) {
-        for role in Role.allCases where roles[role] == nil {
+        for role in Role.required where roles[role] == nil {
             throw .missingRole(role)
         }
         self.roles = roles
@@ -41,7 +41,7 @@ public struct RoutingPolicy: Codable, Sendable, Hashable {
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let roles = try container.decode([Role: RoleRule].self, forKey: .roles)
-        for role in Role.allCases where roles[role] == nil {
+        for role in Role.required where roles[role] == nil {
             throw DecodingError.dataCorruptedError(
                 forKey: .roles, in: container, debugDescription: "Falta el rol \(role.rawValue)")
         }
@@ -56,17 +56,22 @@ public struct RoutingPolicy: Codable, Sendable, Hashable {
         return overrides.first { $0.device.lowercased() == key }
     }
 
-    /// Modelo y esfuerzo del rol; el override del dispositivo (si lo hay) gana sobre la regla base.
-    public func modelChoice(for role: Role, device: String? = nil) -> ModelChoice {
-        if let choice = override(for: device)?.roles[role] { return choice }
-        // Las 4 reglas base existen por construcción (init y decodificación lo validan).
-        return roles[role]!.claude
+    /// Modelo y esfuerzo del rol. Un override del dispositivo con esfuerzo conocido gana; si no,
+    /// la regla base (aunque su esfuerzo sea desconocido). Nil solo si el rol no está en la
+    /// política: para `Role.required` nunca es nil.
+    public func modelChoice(for role: Role, device: String? = nil) -> ModelChoice? {
+        if let choice = override(for: device)?.roles[role], choice.isKnown { return choice }
+        return roles[role]?.claude
     }
 
-    /// Orquestador base con el barato reemplazado por el del dispositivo, si lo tiene.
+    /// Orquestador base con el barato reemplazado por el del dispositivo si es conocido.
+    /// Un barato desconocido queda en nil (todo al fuerte); con fuerte desconocido devuelve nil
+    /// (decide la sesión del agente).
     public func orchestrator(for device: String? = nil) -> OrchestratorPolicy? {
         guard var base = orchestrator else { return nil }
-        if let cheap = override(for: device)?.cheapOrchestrator { base.cheap = cheap }
+        if let cheap = override(for: device)?.cheapOrchestrator, cheap.isKnown { base.cheap = cheap }
+        if let cheap = base.cheap, !cheap.isKnown { base.cheap = nil }
+        guard base.strong.isKnown else { return nil }
         return base
     }
 }
