@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import KayucoCore
 
-private let t0 = Date(timeIntervalSince1970: 1_793_000_000)
+private let t0 = Date(timeIntervalSince1970: 1_793_000_000.25)
 private let enc = KayucoWire.makeEncoder()
 private let dec = KayucoWire.makeDecoder()
 
@@ -175,9 +175,55 @@ struct ProtocoloApprovalTests {
         #expect(try roundTrip(ToolApprovalOutcome.cancelled))
     }
 
-    @Test func unknownOutcomeThrows() {
-        #expect(throws: DecodingError.self) {
-            try dec.decode(ToolApprovalOutcome.self, from: Data(#"{"outcome":"timeout"}"#.utf8))
+    @Test func unknownOutcomeSurvives() throws {
+        let o = try dec.decode(ToolApprovalOutcome.self, from: Data(#"{"outcome":"expired"}"#.utf8))
+        #expect(o == .unknown("expired"))
+        #expect(try json(o) == #"{"outcome":"expired"}"#)
+    }
+
+    @Test func approvalResolvedWithUnknownOutcome() throws {
+        let raw = #"{"type":"approvalResolved","payload":{"requestID":"a1","outcome":{"outcome":"expired"},"decidedBy":"h1","decidedAt":"2026-10-31T06:00:00Z"}}"#
+        guard case .approvalResolved(let d) = try dec.decode(HostMessage.self, from: Data(raw.utf8)) else {
+            Issue.record("tipo incorrecto"); return
         }
+        #expect(d.outcome == .unknown("expired"))
+    }
+}
+
+@Suite("Protocolo fechas y entorno")
+struct ProtocoloDateEnvTests {
+    private func msg(_ t: Double) -> Message {
+        Message(id: "m", sessionID: "s1", role: .user, text: "x", createdAt: Date(timeIntervalSince1970: t))
+    }
+
+    @Test func fractionalSecondsSurvive() throws {
+        let a = try dec.decode(Message.self, from: enc.encode(msg(100.2)))
+        let b = try dec.decode(Message.self, from: enc.encode(msg(100.7)))
+        #expect(a.createdAt != b.createdAt)
+        #expect(a.createdAt < b.createdAt)
+    }
+
+    @Test func decodesWithAndWithoutFraction() throws {
+        func d(_ s: String) throws -> Date { try dec.decode(Date.self, from: Data("\"\(s)\"".utf8)) }
+        let whole = try d("2026-10-31T06:00:00Z")
+        let frac = try d("2026-10-31T06:00:00.250Z")
+        #expect(frac.timeIntervalSince(whole) == 0.25)
+    }
+
+    @Test func invalidDateThrows() {
+        #expect(throws: DecodingError.self) {
+            try dec.decode(Date.self, from: Data(#""ayer""#.utf8))
+        }
+    }
+
+    @Test func unknownEnvironment() throws {
+        let raw = #"{"type":"hello","payload":{"protocol":1,"minClient":1,"host":{"id":"h","name":"M","appVersion":"1","environment":"staging"}}}"#
+        guard case .hello(let h) = try dec.decode(HostMessage.self, from: Data(raw.utf8)) else {
+            Issue.record("tipo incorrecto"); return
+        }
+        #expect(h.host.environment == .unknown("staging"))
+        #expect(Handshake.evaluate(client: clientHello(1, .prod), host: h)
+            == .environmentMismatch(client: .prod, host: .unknown("staging")))
+        #expect(try json(h.host.environment) == #""staging""#)
     }
 }

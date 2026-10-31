@@ -8,6 +8,23 @@ public enum KayucoProtocol {
 }
 
 /// Entorno de la build. Un cliente dev solo ve hosts dev.
-public enum BuildEnvironment: String, Codable, Sendable, Hashable {
+public enum BuildEnvironment: OpenStringEnum {
     case dev, prod
+    case unknown(String)
+
+    public var rawValue: String {
+        switch self {
+        case .dev: "dev"
+        case .prod: "prod"
+        case .unknown(let raw): raw
+        }
+    }
+
+    public init(rawValue: String) {
+        switch rawValue {
+        case "dev": self = .dev
+        case "prod": self = .prod
+        default: self = .unknown(rawValue)
+        }
+    }
 }

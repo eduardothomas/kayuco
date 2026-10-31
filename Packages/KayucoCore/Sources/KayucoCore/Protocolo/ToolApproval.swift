@@ -43,6 +43,8 @@ public struct ToolApprovalRequest: Codable, Sendable, Hashable {
 public enum ToolApprovalOutcome: Codable, Sendable, Hashable {
     case selected(optionID: String)
     case cancelled
+    /// Resultado que esta versión no conoce (p. ej. "expired"); se conserva tal cual.
+    case unknown(String)
 
     private enum CodingKeys: String, CodingKey {
         case outcome, optionID
@@ -57,8 +59,7 @@ public enum ToolApprovalOutcome: Codable, Sendable, Hashable {
         case "cancelled":
             self = .cancelled
         default:
-            throw DecodingError.dataCorruptedError(
-                forKey: .outcome, in: c, debugDescription: "outcome desconocido: \(outcome)")
+            self = .unknown(outcome)
         }
     }
 
@@ -70,6 +71,8 @@ public enum ToolApprovalOutcome: Codable, Sendable, Hashable {
             try c.encode(optionID, forKey: .optionID)
         case .cancelled:
             try c.encode("cancelled", forKey: .outcome)
+        case .unknown(let raw):
+            try c.encode(raw, forKey: .outcome)
         }
     }
 }

@@ -1,17 +1,26 @@
 import Foundation
 
-/// Codificadores del cable: fechas ISO 8601 y llaves ordenadas.
+/// Codificadores del cable: fechas ISO 8601 con milisegundos (se acepta sin fracción al leer) y llaves ordenadas.
 public enum KayucoWire {
     public static func makeEncoder() -> JSONEncoder {
         let e = JSONEncoder()
-        e.dateEncodingStrategy = .iso8601
+        e.dateEncodingStrategy = .custom { date, encoder in
+            var c = encoder.singleValueContainer()
+            try c.encode(date.formatted(Date.ISO8601FormatStyle(includingFractionalSeconds: true)))
+        }
         e.outputFormatting = [.sortedKeys]
         return e
     }
 
     public static func makeDecoder() -> JSONDecoder {
         let d = JSONDecoder()
-        d.dateDecodingStrategy = .iso8601
+        d.dateDecodingStrategy = .custom { decoder in
+            let raw = try decoder.singleValueContainer().decode(String.self)
+            if let date = try? Date.ISO8601FormatStyle(includingFractionalSeconds: true).parse(raw) { return date }
+            if let date = try? Date.ISO8601FormatStyle().parse(raw) { return date }
+            throw DecodingError.dataCorrupted(
+                .init(codingPath: decoder.codingPath, debugDescription: "Fecha ISO 8601 inválida: \(raw)"))
+        }
         return d
     }
 }
