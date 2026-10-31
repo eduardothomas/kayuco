@@ -14,11 +14,11 @@ Cabina nativa Apple sobre agentes de código (ACP). Fase 0 en curso: `Packages/K
 ## Trabajo en curso
 | Rama | PR | Quién | Estado | Siguiente paso |
 |---|---|---|---|---|
-| feature/kayuco-core | [#2](https://github.com/eduardothomas/kayuco/pull/2) | Claude | listo para revisión | Eduardo revisa y fusiona (squash) |
+| feature/politica-enums-abiertos | (ver PR) | Claude | listo para revisión | Eduardo revisa y fusiona (squash) |
 
 ## Última sesión
 - **Fecha y actor:** 2026-10-31 · Claude (Opus 5.5, high) en Claude Code, en la Mac personal.
-- **Rama / PR:** feature/kayuco-core · #2.
+- **Rama / PR:** feature/kayuco-core · #2 (fusionado 2026-10-31); feature/politica-enums-abiertos · PR nuevo con los enums abiertos, que llegaron después de fusionar #2.
 - **Hecho:**
   - `Packages/KayucoCore` (tools 6.1, macOS/iOS 26).
   - Protocolo versionado (ADR 0007): handshake `protocol`/`minClient`/entorno, sesión, mensaje, aprobación de herramienta con opciones ACP, envoltorios `type`/`payload` y enums abiertos.
@@ -29,10 +29,10 @@ Cabina nativa Apple sobre agentes de código (ACP). Fase 0 en curso: `Packages/K
   - CI de Linux con Swift 6.1: verde hasta `dfd803c`; ver el PR para el último commit.
 - **Quedó en:** PR completo; los 10 hallazgos del revisor resueltos (el 10.º, enums cerrados en la política, a pedido de Eduardo).
 - **Siguiente paso:** host mínimo (`Host/`) que hable ACP con OpenCode usando `KayucoCore`; antes, `docs/proveedores.md` con el término de OpenCode (ADR 0005).
-- **Espera a Eduardo:** fusionar #2; dominio; términos de proveedores (ADR 0005).
+- **Espera a Eduardo:** fusionar el PR de enums abiertos; dominio; términos de proveedores (ADR 0005).
 
 ## Funcionalidades terminadas
-- [ ] (ninguna integrada todavía; KayucoCore en #2)
+- [x] KayucoCore: protocolo host↔clientes y política de ruteo con parser (#2, 2026-10-31).
 
 ## Fuera del repositorio
 - Repo `eduardothomas/kayuco-apps` (privado) creado el 2026-10-30.
